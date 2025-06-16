@@ -15,16 +15,10 @@ interface ChatInterfaceProps {
 }
 
 export function ChatInterface({ userId }: ChatInterfaceProps) {
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: "1",
-      role: "assistant",
-      content: "Hej! Jeg er din AI-psykolog. Jeg er her for at lytte og hjælpe dig med at udforske dine tanker og følelser. Hvad har du på hjerte i dag?",
-      timestamp: new Date()
-    }
-  ])
+  const [messages, setMessages] = useState<Message[]>([])
   const [inputValue, setInputValue] = useState("")
   const [isLoading, setIsLoading] = useState(false)
+  const [isLoadingHistory, setIsLoadingHistory] = useState(true)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   const scrollToBottom = () => {
@@ -34,6 +28,54 @@ export function ChatInterface({ userId }: ChatInterfaceProps) {
   useEffect(() => {
     scrollToBottom()
   }, [messages])
+
+  // Load conversation history on mount
+  useEffect(() => {
+    const loadConversationHistory = async () => {
+      try {
+        setIsLoadingHistory(true)
+        const response = await fetch(`/api/user/${userId}/conversations?session_id=default`)
+        
+        if (response.ok) {
+          const data = await response.json()
+          
+          // Add welcome message if no previous messages
+          if (!data.messages || data.messages.length === 0) {
+            setMessages([{
+              id: "welcome",
+              role: "assistant",
+              content: "Hej! Jeg er din AI-psykolog. Jeg er her for at lytte og hjælpe dig med at udforske dine tanker og følelser. Hvad har du på hjerte i dag?",
+              timestamp: new Date()
+            }])
+          } else {
+            // Convert backend messages to frontend format
+            const convertedMessages: Message[] = data.messages.map((msg: any) => ({
+              id: msg.id,
+              role: msg.role as "user" | "assistant",
+              content: msg.content,
+              timestamp: new Date(msg.timestamp)
+            }))
+            setMessages(convertedMessages)
+          }
+        }
+      } catch (error) {
+        console.error("Error loading conversation history:", error)
+        // Show welcome message on error
+        setMessages([{
+          id: "welcome",
+          role: "assistant",
+          content: "Hej! Jeg er din AI-psykolog. Jeg er her for at lytte og hjælpe dig med at udforske dine tanker og følelser. Hvad har du på hjerte i dag?",
+          timestamp: new Date()
+        }])
+      } finally {
+        setIsLoadingHistory(false)
+      }
+    }
+
+    if (userId) {
+      loadConversationHistory()
+    }
+  }, [userId])
 
   const handleSendMessage = async () => {
     if (!inputValue.trim() || isLoading) return
@@ -63,7 +105,7 @@ export function ChatInterface({ userId }: ChatInterfaceProps) {
         return
       }
 
-      const response = await fetch("/api/conversation", {
+      const response = await fetch("http://localhost:8000/api/conversation", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -127,40 +169,51 @@ export function ChatInterface({ userId }: ChatInterfaceProps) {
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {messages.map((message) => (
-          <div
-            key={message.id}
-            className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
-          >
-            <div
-              className={`max-w-xs lg:max-w-md px-4 py-2 rounded-lg ${
-                message.role === "user"
-                  ? "bg-blue-600 text-white"
-                  : "bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-white"
-              }`}
-            >
-              <p className="text-sm">{message.content}</p>
-              <p className={`text-xs mt-1 ${
-                message.role === "user" ? "text-blue-100" : "text-gray-500 dark:text-gray-400"
-              }`}>
-                {message.timestamp.toLocaleTimeString("da-DK", { 
-                  hour: "2-digit", 
-                  minute: "2-digit" 
-                })}
-              </p>
+        {isLoadingHistory ? (
+          <div className="flex justify-center items-center h-full">
+            <div className="flex items-center space-x-2">
+              <Loader2 className="w-5 h-5 animate-spin text-gray-500" />
+              <span className="text-sm text-gray-500 dark:text-gray-400">Indlæser samtalehistorik...</span>
             </div>
           </div>
-        ))}
-        
-        {isLoading && (
-          <div className="flex justify-start">
-            <div className="bg-gray-100 dark:bg-gray-700 px-4 py-2 rounded-lg">
-              <div className="flex items-center space-x-2">
-                <Loader2 className="w-4 h-4 animate-spin text-gray-500" />
-                <span className="text-sm text-gray-500 dark:text-gray-400">Skriver...</span>
+        ) : (
+          <>
+            {messages.map((message) => (
+              <div
+                key={message.id}
+                className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
+              >
+                <div
+                  className={`max-w-xs lg:max-w-md px-4 py-2 rounded-lg ${
+                    message.role === "user"
+                      ? "bg-blue-600 text-white"
+                      : "bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-white"
+                  }`}
+                >
+                  <p className="text-sm">{message.content}</p>
+                  <p className={`text-xs mt-1 ${
+                    message.role === "user" ? "text-blue-100" : "text-gray-500 dark:text-gray-400"
+                  }`}>
+                    {message.timestamp.toLocaleTimeString("da-DK", { 
+                      hour: "2-digit", 
+                      minute: "2-digit" 
+                    })}
+                  </p>
+                </div>
               </div>
-            </div>
-          </div>
+            ))}
+            
+            {isLoading && (
+              <div className="flex justify-start">
+                <div className="bg-gray-100 dark:bg-gray-700 px-4 py-2 rounded-lg">
+                  <div className="flex items-center space-x-2">
+                    <Loader2 className="w-4 h-4 animate-spin text-gray-500" />
+                    <span className="text-sm text-gray-500 dark:text-gray-400">Skriver...</span>
+                  </div>
+                </div>
+              </div>
+            )}
+          </>
         )}
         
         <div ref={messagesEndRef} />
