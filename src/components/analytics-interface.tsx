@@ -1,41 +1,88 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { BarChart3, TrendingUp, Heart, Brain, Calendar, Award } from "lucide-react"
 
 interface AnalyticsInterfaceProps {
   userId: string
 }
 
+interface UserInsights {
+  emotional_patterns: string[]
+  conversation_themes: string[]
+  progress_indicators: string[]
+  recommendations: string[]
+}
+
 export function AnalyticsInterface({ userId }: AnalyticsInterfaceProps) {
   const [timeRange, setTimeRange] = useState<"week" | "month" | "year">("month")
+  const [insights, setInsights] = useState<UserInsights | null>(null)
+  const [loading, setLoading] = useState(true)
 
-  // Mock data - in a real app, this would come from the backend
-  const emotionData = [
-    { emotion: "Glad", count: 12, color: "bg-green-500" },
-    { emotion: "Neutral", count: 8, color: "bg-yellow-500" },
-    { emotion: "Trist", count: 5, color: "bg-red-500" },
-    { emotion: "Stresset", count: 7, color: "bg-orange-500" },
-    { emotion: "Rolig", count: 10, color: "bg-blue-500" },
-  ]
+  useEffect(() => {
+    const fetchInsights = async () => {
+      try {
+        const response = await fetch(`/api/user/${userId}/insights`)
+        if (response.ok) {
+          const data = await response.json()
+          setInsights(data)
+        }
+      } catch (error) {
+        console.error('Failed to fetch insights:', error)
+      } finally {
+        setLoading(false)
+      }
+    }
 
+    if (userId) {
+      fetchInsights()
+    }
+  }, [userId])
+
+  // Generate emotion data based on conversation themes
+  const emotionData = insights?.conversation_themes.length ? [
+    { emotion: "Positiv", count: insights.conversation_themes.filter(theme => 
+      theme.toLowerCase().includes('glad') || theme.toLowerCase().includes('godt')).length, color: "bg-green-500" },
+    { emotion: "Neutral", count: Math.max(1, Math.floor(insights.conversation_themes.length / 3)), color: "bg-yellow-500" },
+    { emotion: "Udfordrende", count: insights.conversation_themes.filter(theme => 
+      theme.toLowerCase().includes('trist') || theme.toLowerCase().includes('stress')).length, color: "bg-red-500" },
+  ] : []
+
+  // Default weekly mood pattern when no data available
   const weeklyMood = [
-    { day: "Man", mood: 7 },
-    { day: "Tir", mood: 6 },
-    { day: "Ons", mood: 8 },
+    { day: "Man", mood: 5 },
+    { day: "Tir", mood: 5 },
+    { day: "Ons", mood: 5 },
     { day: "Tor", mood: 5 },
-    { day: "Fre", mood: 9 },
-    { day: "Lør", mood: 8 },
-    { day: "Søn", mood: 7 },
+    { day: "Fre", mood: 5 },
+    { day: "Lør", mood: 5 },
+    { day: "Søn", mood: 5 },
   ]
 
+  // Dynamic achievements based on actual usage
   const achievements = [
-    { id: 1, title: "Første samtale", description: "Gennemførte din første AI-samtale", earned: true, icon: "🎯" },
-    { id: 2, title: "Dagbog begynder", description: "Skrev din første dagbogsindgang", earned: true, icon: "📝" },
-    { id: 3, title: "Uge streak", description: "7 dage i træk med aktivitet", earned: true, icon: "🔥" },
-    { id: 4, title: "Følelsesmester", description: "Identificerede 10 forskellige følelser", earned: false, icon: "❤️" },
-    { id: 5, title: "Måned aktiv", description: "30 dage med regelmæssig brug", earned: false, icon: "🏆" },
+    { id: 1, title: "Første samtale", description: "Gennemførte din første AI-samtale", 
+      earned: insights?.conversation_themes.length > 0, icon: "🎯" },
+    { id: 2, title: "Aktiv bruger", description: "Har haft flere samtaler", 
+      earned: insights?.conversation_themes.length > 2, icon: "📝" },
+    { id: 3, title: "Selvrefleksion", description: "Udforskede dine følelser", 
+      earned: insights?.emotional_patterns.length > 0, icon: "🔥" },
+    { id: 4, title: "Fremskridt", description: "Viser tegn på positiv udvikling", 
+      earned: insights?.progress_indicators.length > 0, icon: "❤️" },
+    { id: 5, title: "Dedikeret", description: "Regelmæssig brug af platformen", 
+      earned: insights?.conversation_themes.length > 5, icon: "🏆" },
   ]
+
+  if (loading) {
+    return (
+      <div className="space-y-6">
+        <div className="flex justify-center items-center py-12">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+          <span className="ml-3 text-gray-600 dark:text-gray-400">Indlæser dine indsigter...</span>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-6">
@@ -69,31 +116,31 @@ export function AnalyticsInterface({ userId }: AnalyticsInterfaceProps) {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         <MetricCard
           title="Samtaler"
-          value="12"
-          change="+3 fra sidste uge"
+          value={insights?.conversation_themes.length.toString() || "0"}
+          change={insights?.conversation_themes.length > 0 ? "Aktiv bruger" : "Ingen samtaler endnu"}
           icon={<Brain className="w-6 h-6 text-blue-600" />}
-          trend="up"
+          trend={insights?.conversation_themes.length > 0 ? "up" : "neutral"}
         />
         <MetricCard
-          title="Dagbogsindlæg"
-          value="8"
-          change="+2 fra sidste uge"
+          title="Indsigter"
+          value={insights?.emotional_patterns.length.toString() || "0"}
+          change={insights?.emotional_patterns.length > 0 ? "Følelsesmønstre identificeret" : "Ingen mønstre endnu"}
           icon={<Calendar className="w-6 h-6 text-green-600" />}
-          trend="up"
+          trend={insights?.emotional_patterns.length > 0 ? "up" : "neutral"}
         />
         <MetricCard
-          title="Gennemsnitlig humør"
-          value="7.2"
-          change="+0.5 fra sidste uge"
+          title="Fremskridt"
+          value={insights?.progress_indicators.length.toString() || "0"}
+          change={insights?.progress_indicators.length > 0 ? "Positive tegn" : "Fortsæt din rejse"}
           icon={<Heart className="w-6 h-6 text-red-600" />}
-          trend="up"
+          trend={insights?.progress_indicators.length > 0 ? "up" : "neutral"}
         />
         <MetricCard
-          title="Streak"
-          value="5 dage"
-          change="Nuværende streak"
+          title="Anbefalinger"
+          value={insights?.recommendations.length.toString() || "0"}
+          change={insights?.recommendations.length > 0 ? "Personlige forslag" : "Kom i gang"}
           icon={<Award className="w-6 h-6 text-purple-600" />}
-          trend="neutral"
+          trend={insights?.recommendations.length > 0 ? "up" : "neutral"}
         />
       </div>
 
@@ -188,24 +235,34 @@ export function AnalyticsInterface({ userId }: AnalyticsInterfaceProps) {
           Personlige indsigter
         </h3>
         <div className="space-y-3">
-          <div className="flex items-start space-x-3">
-            <TrendingUp className="w-5 h-5 text-green-600 mt-0.5" />
-            <p className="text-sm text-gray-700 dark:text-gray-300">
-              Dit humør har været stigende de sidste 2 uger. Fortsæt med de aktiviteter, der gør dig glad!
-            </p>
-          </div>
-          <div className="flex items-start space-x-3">
-            <Heart className="w-5 h-5 text-red-600 mt-0.5" />
-            <p className="text-sm text-gray-700 dark:text-gray-300">
-              Du udtrykker oftere positive følelser i weekenderne. Overvej at integrere mere fritid i hverdagen.
-            </p>
-          </div>
-          <div className="flex items-start space-x-3">
-            <Brain className="w-5 h-5 text-purple-600 mt-0.5" />
-            <p className="text-sm text-gray-700 dark:text-gray-300">
-              Dine dagbogsindlæg viser øget selvbevidsthed. Dette er et tegn på positiv personlig udvikling.
-            </p>
-          </div>
+          {insights?.conversation_themes.length > 0 ? (
+            insights.conversation_themes.slice(0, 3).map((theme, index) => (
+              <div key={index} className="flex items-start space-x-3">
+                <TrendingUp className="w-5 h-5 text-green-600 mt-0.5" />
+                <p className="text-sm text-gray-700 dark:text-gray-300">
+                  {theme}
+                </p>
+              </div>
+            ))
+          ) : (
+            <div className="flex items-start space-x-3">
+              <Brain className="w-5 h-5 text-blue-600 mt-0.5" />
+              <p className="text-sm text-gray-700 dark:text-gray-300">
+                Start en samtale for at få personlige indsigter baseret på dine oplevelser.
+              </p>
+            </div>
+          )}
+          
+          {insights?.recommendations.length > 0 && (
+            insights.recommendations.slice(0, 2).map((recommendation, index) => (
+              <div key={index} className="flex items-start space-x-3">
+                <Heart className="w-5 h-5 text-red-600 mt-0.5" />
+                <p className="text-sm text-gray-700 dark:text-gray-300">
+                  {recommendation}
+                </p>
+              </div>
+            ))
+          )}
         </div>
       </div>
     </div>

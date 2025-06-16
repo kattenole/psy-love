@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Calendar, Save, Sparkles, Heart, Smile, Frown, Meh } from "lucide-react"
 
 interface JournalEntry {
@@ -19,22 +19,13 @@ export function JournalInterface({ userId }: JournalInterfaceProps) {
   const [currentEntry, setCurrentEntry] = useState("")
   const [selectedMood, setSelectedMood] = useState<"happy" | "neutral" | "sad" | null>(null)
   const [isLoading, setIsLoading] = useState(false)
-  const [entries] = useState<JournalEntry[]>([
-    {
-      id: "1",
-      date: "2024-06-15",
-      content: "I dag følte jeg mig mere optimistisk end i går. Jeg havde en god samtale med en ven, og det hjalp mig med at se tingene i et nyt perspektiv.",
-      emotions: ["optimistisk", "taknemmelig", "forbundet"],
-      mood: "happy"
-    },
-    {
-      id: "2", 
-      date: "2024-06-14",
-      content: "Arbejdet var stressende i dag. Jeg følte mig overvældet af alle opgaverne. Måske skal jeg lære at sige nej til flere ting.",
-      emotions: ["stresset", "overvældet", "træt"],
-      mood: "sad"
-    }
-  ])
+  const [entries, setEntries] = useState<JournalEntry[]>([])
+
+  // Fetch journal entries (placeholder for now since we don't have a backend endpoint yet)
+  useEffect(() => {
+    // In a real implementation, we would fetch entries from the backend
+    // For now, we'll keep the entries empty until we implement the backend endpoint
+  }, [userId])
 
   const handleSaveEntry = async () => {
     if (!currentEntry.trim() || !selectedMood) return

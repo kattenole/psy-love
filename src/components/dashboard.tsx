@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { signOut } from "next-auth/react"
 import { 
   Brain, 
@@ -34,6 +34,35 @@ type ActiveTab = "chat" | "journal" | "analytics" | "settings"
 
 export function Dashboard({ user }: DashboardProps) {
   const [activeTab, setActiveTab] = useState<ActiveTab>("chat")
+  const [stats, setStats] = useState({
+    conversations: 0,
+    journalEntries: 0,
+    streak: 0,
+    loading: true
+  })
+
+  useEffect(() => {
+    const fetchStats = async () => {
+      try {
+        const userId = user.id || user.email || 'anonymous'
+        const response = await fetch(`/api/user/${userId}/insights`)
+        if (response.ok) {
+          const data = await response.json()
+          setStats({
+            conversations: data.conversation_themes?.length || 0,
+            journalEntries: 0, // We'll implement this when we add journal tracking
+            streak: Math.min(data.conversation_themes?.length || 0, 7), // Simple streak calculation
+            loading: false
+          })
+        }
+      } catch (error) {
+        console.error('Failed to fetch stats:', error)
+        setStats(prev => ({ ...prev, loading: false }))
+      }
+    }
+
+    fetchStats()
+  }, [user])
 
   const tabs = [
     { id: "chat" as const, label: "Samtale", icon: MessageCircle },
@@ -112,15 +141,21 @@ export function Dashboard({ user }: DashboardProps) {
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-sm text-gray-600 dark:text-gray-400">Samtaler</span>
-                  <span className="text-sm font-medium text-gray-900 dark:text-white">12</span>
+                  <span className="text-sm font-medium text-gray-900 dark:text-white">
+                    {stats.loading ? "..." : stats.conversations}
+                  </span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-sm text-gray-600 dark:text-gray-400">Dagbogsindlæg</span>
-                  <span className="text-sm font-medium text-gray-900 dark:text-white">8</span>
+                  <span className="text-sm font-medium text-gray-900 dark:text-white">
+                    {stats.loading ? "..." : stats.journalEntries}
+                  </span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-sm text-gray-600 dark:text-gray-400">Streak</span>
-                  <span className="text-sm font-medium text-blue-600 dark:text-blue-400">5 dage</span>
+                  <span className="text-sm font-medium text-blue-600 dark:text-blue-400">
+                    {stats.loading ? "..." : `${stats.streak} dage`}
+                  </span>
                 </div>
               </div>
             </div>

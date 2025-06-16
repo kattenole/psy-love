@@ -72,6 +72,13 @@ async def initialize_graphiti():
     neo4j_password = os.getenv("NEO4J_PASSWORD", "password")
     
     try:
+        # Test Neo4j connection first
+        from neo4j import GraphDatabase
+        driver = GraphDatabase.driver(neo4j_uri, auth=(neo4j_user, neo4j_password))
+        with driver.session() as session:
+            session.run("RETURN 1")
+        driver.close()
+        
         graphiti_client = Graphiti(
             neo4j_uri,
             neo4j_user,
@@ -85,41 +92,64 @@ async def initialize_graphiti():
             embedder=GeminiEmbedder(
                 config=GeminiEmbedderConfig(
                     api_key=api_key,
-                    embedding_model="text-embedding-001"
+                    embedding_model="text-embedding-004"
                 )
             )
         )
         
         # Build indices and constraints
         await graphiti_client.build_indices_and_constraints()
-        print("✅ Graphiti client initialized successfully")
+        print("✅ Graphiti client initialized successfully with Neo4j")
         
     except Exception as e:
         print(f"⚠️  Failed to initialize Graphiti: {e}")
+        if "Connect call failed" in str(e) or "Cannot assign requested address" in str(e):
+            print("   Neo4j is not running. Please start Neo4j to enable full functionality.")
+            print("   Run: docker-compose up -d neo4j")
         print("   Running in demo mode without Graphiti")
         graphiti_client = None
 
-def generate_demo_response(message: str) -> str:
-    """Generate a demo response for when Graphiti is not available"""
-    message_lower = message.lower()
+async def generate_ai_response(message: str, context: str = "", user_id: str = "anonymous") -> str:
+    """Generate AI response using Gemini"""
+    api_key = os.getenv("GOOGLE_API_KEY")
+    if not api_key:
+        return "Beklager, AI-tjenesten er ikke tilgængelig lige nu. Prøv igen senere."
     
-    if "/dagbog" in message_lower:
-        return "Jeg har oprettet en ny dagbogsindgang for dig. Gå til Dagbog-fanen for at begynde at skrive. Hvad vil du gerne udforske i din dagbog i dag?"
-    
-    if any(word in message_lower for word in ["trist", "ked", "deprimeret", "dårlig"]):
-        return "Jeg kan høre, at du går gennem en svær tid. Det er modigt af dig at dele det med mig. Kan du fortælle mig mere om, hvad der får dig til at føle dig sådan?"
-    
-    if any(word in message_lower for word in ["glad", "lykkelig", "godt", "fantastisk"]):
-        return "Det er dejligt at høre, at du har det godt! Positive følelser er vigtige at anerkende. Hvad tror du, der bidrager til denne gode følelse?"
-    
-    if any(word in message_lower for word in ["stress", "stresset", "presset", "overvældet"]):
-        return "Stress kan være meget udmattende. Lad os udforske, hvad der forårsager denne stress. Kan du identificere de specifikke faktorer, der bidrager til denne følelse?"
-    
-    if any(word in message_lower for word in ["angst", "bekymret", "nervøs", "urolig"]):
-        return "Angst kan være meget udfordrende at håndtere. Du er ikke alene med disse følelser. Hvad er det, der bekymrer dig mest lige nu?"
-    
-    # Default empathetic response
-    return "Tak for at dele det med mig. Jeg er her for at lytte og støtte dig. Kan du fortælle mig mere om, hvordan du har det med denne situation?"
+    try:
+        import google.generativeai as genai
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-2.0-flash')
+        
+        # Create a comprehensive prompt for the AI psychologist
+        system_prompt = """Du er en erfaren og empatisk dansk psykolog, der specialiserer sig i kognitiv adfærdsterapi (CBT) og mindfulness-baserede tilgange. 
+
+Dine principper:
+- Vær altid empatisk, ikke-dømmende og støttende
+- Stil åbne spørgsmål for at hjælpe brugeren med at udforske deres følelser
+- Brug evidensbaserede terapeutiske teknikker
+- Responder på dansk med en varm og professionel tone
+- Fokuser på brugerens styrker og resiliens
+- Tilbyd praktiske øvelser og strategier når det er relevant
+
+Hvis brugeren nævner selvskade eller selvmordstanker, skal du:
+1. Anerkende deres mod til at dele
+2. Opfordre dem til at søge professionel hjælp
+3. Foreslå kriselinjer: Livslinjen (70 201 201) eller Børnetelefonen (116 111)
+
+Svar kort og fokuseret (max 2-3 sætninger), medmindre brugeren beder om mere detaljeret hjælp."""
+
+        # Prepare the prompt with context
+        prompt = f"{system_prompt}\n\n"
+        if context:
+            prompt += f"Tidligere samtalekontext:\n{context}\n\n"
+        prompt += f"Bruger: {message}\n\nPsykolog:"
+        
+        response = model.generate_content(prompt)
+        return response.text.strip()
+        
+    except Exception as e:
+        print(f"Error generating AI response: {e}")
+        return "Jeg har tekniske problemer lige nu. Kan du prøve at omformulere dit spørgsmål?"
 
 @app.on_event("startup")
 async def startup_event():
@@ -154,8 +184,8 @@ async def handle_conversation(request: ConversationRequest):
             except Exception as e:
                 print(f"Warning: Graphiti search failed: {e}")
         
-        # Generate response based on message content
-        response_content = generate_demo_response(request.message)
+        # Generate AI response with context
+        response_content = await generate_ai_response(request.message, context, request.user_id)
         
         # Store the conversation in Graphiti if available
         if graphiti_client:
