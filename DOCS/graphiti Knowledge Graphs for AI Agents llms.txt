@@ -1,0 +1,1111 @@
+TITLE: Install Graphiti Core Library
+DESCRIPTION: Instructions for installing the core Graphiti library using pip or poetry. Graphiti requires Python 3.10 or higher and Neo4j 5.26 or higher as its embeddings storage backend.
+SOURCE: https://github.com/getzep/graphiti/blob/main/README.md#_snippet_0
+
+LANGUAGE: bash
+CODE:
+```
+pip install graphiti-core
+```
+
+LANGUAGE: bash
+CODE:
+```
+poetry add graphiti-core
+```
+
+----------------------------------------
+
+TITLE: Defining get_shoe_data LangChain Tool - Python
+DESCRIPTION: This asynchronous Python function, decorated as a LangChain tool, searches the Graphiti graph for shoe-related information based on a given query. It centers the search on the `manybirds_node_uuid` to prioritize relevant results and formats the output using `edges_to_facts_string`. It then initializes a `ToolNode` with this tool.
+SOURCE: https://github.com/getzep/graphiti/blob/main/examples/langgraph-agent/agent.ipynb#_snippet_12
+
+LANGUAGE: python
+CODE:
+```
+@tool
+async def get_shoe_data(query: str) -> str:
+    """Search the graphiti graph for information about shoes"""
+    edge_results = await client.search(
+        query,
+        center_node_uuid=manybirds_node_uuid,
+        num_results=10,
+    )
+    return edges_to_facts_string(edge_results)
+
+
+tools = [get_shoe_data]
+tool_node = ToolNode(tools)
+```
+
+----------------------------------------
+
+TITLE: Defining Conditional Logic and Building LangGraph Agent
+DESCRIPTION: This snippet defines a `should_continue` function to control the LangGraph's flow based on tool calls in the last message. It then uses `graph_builder` to add nodes for the agent and tools, and defines edges, including a conditional edge that uses `should_continue` to decide whether to proceed to tools or end the graph. Finally, the graph is compiled.
+SOURCE: https://github.com/getzep/graphiti/blob/main/examples/langgraph-agent/agent.ipynb#_snippet_17
+
+LANGUAGE: python
+CODE:
+```
+async def should_continue(state, config):
+    messages = state['messages']
+    last_message = messages[-1]
+    # If there is no function call, then we finish
+    if not last_message.tool_calls:
+        return 'end'
+    # Otherwise if there is, we continue
+    else:
+        return 'continue'
+
+
+graph_builder.add_node('agent', chatbot)
+graph_builder.add_node('tools', tool_node)
+
+graph_builder.add_edge(START, 'agent')
+graph_builder.add_conditional_edges('agent', should_continue, {'continue': 'tools', 'end': END})
+graph_builder.add_edge('tools', 'agent')
+
+graph = graph_builder.compile(checkpointer=memory)
+```
+
+----------------------------------------
+
+TITLE: Importing LangChain and LangGraph Components - Python
+DESCRIPTION: This snippet imports necessary classes and functions from `langchain_core`, `langchain_openai`, and `langgraph`. These imports are foundational for building the AI agent, defining tools, managing conversation state, and constructing the graph.
+SOURCE: https://github.com/getzep/graphiti/blob/main/examples/langgraph-agent/agent.ipynb#_snippet_11
+
+LANGUAGE: python
+CODE:
+```
+from langchain_core.messages import AIMessage, SystemMessage
+from langchain_core.tools import tool
+from langchain_openai import ChatOpenAI
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import END, START, StateGraph, add_messages
+from langgraph.prebuilt import ToolNode
+```
+
+----------------------------------------
+
+TITLE: Implementing Graphiti-Powered Chatbot Logic - Python
+DESCRIPTION: This asynchronous Python function defines the main `chatbot` logic within the LangGraph agent. It retrieves conversation context from Graphiti, constructs a dynamic system message for the LLM, invokes the LLM for a response, and asynchronously persists the interaction back into the Graphiti graph for future context, ensuring personalized and context-aware replies.
+SOURCE: https://github.com/getzep/graphiti/blob/main/examples/langgraph-agent/agent.ipynb#_snippet_15
+
+LANGUAGE: python
+CODE:
+```
+class State(TypedDict):
+    messages: Annotated[list, add_messages]
+    user_name: str
+    user_node_uuid: str
+
+
+async def chatbot(state: State):
+    facts_string = None
+    if len(state['messages']) > 0:
+        last_message = state['messages'][-1]
+        graphiti_query = f'{"SalesBot" if isinstance(last_message, AIMessage) else state["user_name"]}: {last_message.content}'
+        # search graphiti using Jess's node uuid as the center node
+        # graph edges (facts) further from the Jess node will be ranked lower
+        edge_results = await client.search(
+            graphiti_query, center_node_uuid=state['user_node_uuid'], num_results=5
+        )
+        facts_string = edges_to_facts_string(edge_results)
+
+    system_message = SystemMessage(
+        content=f"""You are a skillfull shoe salesperson working for ManyBirds. Review information about the user and their prior conversation below and respond accordingly.
+        Keep responses short and concise. And remember, always be selling (and helpful!)
+
+        Things you'll need to know about the user in order to close a sale:
+        - the user's shoe size
+        - any other shoe needs? maybe for wide feet?
+        - the user's preferred colors and styles
+        - their budget
+
+        Ensure that you ask the user for the above if you don't already know.
+
+        Facts about the user and their conversation:
+        {facts_string or 'No facts about the user and their conversation'}"""
+    )
+
+    messages = [system_message] + state['messages']
+
+    response = await llm.ainvoke(messages)
+
+    # add the response to the graphiti graph.
+    # this will allow us to use the graphiti search later in the conversation
+    # we're doing async here to avoid blocking the graph execution
+    asyncio.create_task(
+        client.add_episode(
+            name='Chatbot Response',
+            episode_body=f'{state["user_name"]}: {state["messages"][-1]}\nSalesBot: {response.content}',
+            source=EpisodeType.message,
+            reference_time=datetime.now(timezone.utc),
+            source_description='Chatbot',
+        )
+    )
+
+    return {'messages': [response]}
+```
+
+----------------------------------------
+
+TITLE: Initializing OpenAI LLM with Tools - Python
+DESCRIPTION: This snippet initializes a `ChatOpenAI` language model with a specific model and temperature. Crucially, it binds the previously defined `tools` (e.g., `get_shoe_data`) to the LLM, enabling the model to use these tools for external actions during its reasoning process.
+SOURCE: https://github.com/getzep/graphiti/blob/main/examples/langgraph-agent/agent.ipynb#_snippet_13
+
+LANGUAGE: python
+CODE:
+```
+llm = ChatOpenAI(model='gpt-4.1-mini', temperature=0).bind_tools(tools)
+```
+
+----------------------------------------
+
+TITLE: Initializing LangGraph State and Memory - Python
+DESCRIPTION: This snippet initializes a `StateGraph` with the defined `State` type, which forms the foundation of the LangGraph agent's workflow. It also initializes a `MemorySaver` for persistent conversation state, complementing Graphiti's role in storing factual context.
+SOURCE: https://github.com/getzep/graphiti/blob/main/examples/langgraph-agent/agent.ipynb#_snippet_16
+
+LANGUAGE: python
+CODE:
+```
+graph_builder = StateGraph(State)
+
+memory = MemorySaver()
+```
+
+----------------------------------------
+
+TITLE: Ingesting Product Data into Graphiti
+DESCRIPTION: This asynchronous Python function reads product data from a JSON file and ingests each product as an 'episode' into the Graphiti graph. Each product's title, body, source, and reference time are recorded, enriching the graph with product information for the sales agent.
+SOURCE: https://github.com/getzep/graphiti/blob/main/examples/langgraph-agent/agent.ipynb#_snippet_7
+
+LANGUAGE: python
+CODE:
+```
+async def ingest_products_data(client: Graphiti):
+    script_dir = Path.cwd().parent
+    json_file_path = script_dir / 'data' / 'manybirds_products.json'
+
+    with open(json_file_path) as file:
+        products = json.load(file)['products']
+
+    for i, product in enumerate(products):
+        await client.add_episode(
+            name=product.get('title', f'Product {i}'),
+            episode_body=str({k: v for k, v in product.items() if k != 'images'}),
+            source_description='ManyBirds products',
+            source=EpisodeType.json,
+            reference_time=datetime.now(timezone.utc),
+        )
+
+
+await ingest_products_data(client)
+```
+
+----------------------------------------
+
+TITLE: Running Graphiti MCP Server with Docker Compose
+DESCRIPTION: Alternatively, this command starts the Graphiti MCP server using Docker Compose, which typically sets up the server with the SSE transport as defined in the `docker-compose.yml` file.
+SOURCE: https://github.com/getzep/graphiti/blob/main/mcp_server/README.md#_snippet_16
+
+LANGUAGE: bash
+CODE:
+```
+docker compose up
+```
+
+----------------------------------------
+
+TITLE: Initializing Graphiti Client Connection
+DESCRIPTION: This Python code initializes the Graphiti client by retrieving Neo4j connection details from environment variables. It creates a `Graphiti` instance, which will be used to interact with the Neo4j graph database for data operations.
+SOURCE: https://github.com/getzep/graphiti/blob/main/examples/langgraph-agent/agent.ipynb#_snippet_5
+
+LANGUAGE: python
+CODE:
+```
+# Configure Graphiti
+
+from graphiti_core import Graphiti
+from graphiti_core.edges import EntityEdge
+from graphiti_core.nodes import EpisodeType
+from graphiti_core.utils.maintenance.graph_data_operations import clear_data
+
+neo4j_uri = os.environ.get('NEO4J_URI', 'bolt://localhost:7687')
+neo4j_user = os.environ.get('NEO4J_USER', 'neo4j')
+neo4j_password = os.environ.get('NEO4J_PASSWORD', 'password')
+
+client = Graphiti(
+    neo4j_uri,
+    neo4j_user,
+    neo4j_password,
+)
+```
+
+----------------------------------------
+
+TITLE: Creating and Retrieving User Node in Graphiti
+DESCRIPTION: This Python snippet adds a new 'User Creation' episode to Graphiti, indicating a user's interest in shoes. It then searches for the created user node ('jess') using a hybrid search configuration and extracts its UUID, which can be used to personalize agent interactions.
+SOURCE: https://github.com/getzep/graphiti/blob/main/examples/langgraph-agent/agent.ipynb#_snippet_8
+
+LANGUAGE: python
+CODE:
+```
+from graphiti_core.search.search_config_recipes import NODE_HYBRID_SEARCH_EPISODE_MENTIONS
+
+user_name = 'jess'
+
+await client.add_episode(
+    name='User Creation',
+    episode_body=(f'{user_name} is interested in buying a pair of shoes'),
+    source=EpisodeType.text,
+    reference_time=datetime.now(timezone.utc),
+    source_description='SalesBot',
+)
+
+# let's get Jess's node uuid
+nl = await client._search(user_name, NODE_HYBRID_SEARCH_EPISODE_MENTIONS)
+
+user_node_uuid = nl.nodes[0].uuid
+```
+
+----------------------------------------
+
+TITLE: Running the Graphiti Quickstart Example (Bash)
+DESCRIPTION: This command executes the `quickstart.py` script, initiating the Graphiti example. It connects to Neo4j, initializes the graph, adds sample data, and performs various search operations as demonstrated in the quickstart.
+SOURCE: https://github.com/getzep/graphiti/blob/main/examples/quickstart/README.md#_snippet_2
+
+LANGUAGE: bash
+CODE:
+```
+python quickstart.py
+```
+
+----------------------------------------
+
+TITLE: Adding JSON Data as an Episode to Knowledge Graph (Tool Call)
+DESCRIPTION: This snippet shows an example of using the `add_episode` tool to ingest structured JSON data into the knowledge graph. The `episode_body` parameter contains the JSON string, and `source` is set to 'json' to enable automatic entity and relationship extraction.
+SOURCE: https://github.com/getzep/graphiti/blob/main/mcp_server/README.md#_snippet_14
+
+LANGUAGE: python
+CODE:
+```
+add_episode(
+name="Customer Profile",
+episode_body="{\"company\": {\"name\": \"Acme Technologies\"}, \"products\": [{\"id\": \"P001\", \"name\": \"CloudSync\"}, {\"id\": \"P002\", \"name\": \"DataMiner\"}]}",
+source="json",
+source_description="CRM data"
+)
+```
+
+----------------------------------------
+
+TITLE: Copying .env.example to .env for Configuration (Bash)
+DESCRIPTION: This command copies the example environment file to a new .env file, which can then be edited to configure API keys and other settings for the Graphiti application. This is the recommended method for environment configuration.
+SOURCE: https://github.com/getzep/graphiti/blob/main/mcp_server/README.md#_snippet_7
+
+LANGUAGE: bash
+CODE:
+```
+cp .env.example .env
+```
+
+----------------------------------------
+
+TITLE: Docker Compose Setup for Graph Service and Neo4j
+DESCRIPTION: This Docker Compose configuration defines a multi-service setup, including the 'graph' service (using 'zepai/graphiti:latest') and a 'neo4j' database instance. It maps ports, passes environment variables, and sets up a named volume for Neo4j data persistence, facilitating local development and deployment.
+SOURCE: https://github.com/getzep/graphiti/blob/main/server/README.md#_snippet_1
+
+LANGUAGE: yaml
+CODE:
+```
+      version: '3.8'
+
+      services:
+      graph:
+         image: zepai/graphiti:latest
+         ports:
+            - "8000:8000"
+         
+         environment:
+            - OPENAI_API_KEY=${OPENAI_API_KEY}
+            - NEO4J_URI=bolt://neo4j:${NEO4J_PORT}
+            - NEO4J_USER=${NEO4J_USER}
+            - NEO4J_PASSWORD=${NEO4J_PASSWORD}
+      neo4j:
+         image: neo4j:5.22.0
+         
+         ports:
+            - "7474:7474"  # HTTP
+            - "${NEO4J_PORT}:${NEO4J_PORT}"  # Bolt
+         volumes:
+            - neo4j_data:/data
+         environment:
+            - NEO4J_AUTH=${NEO4J_USER}/${NEO4J_PASSWORD}
+
+      volumes:
+      neo4j_data:
+```
+
+----------------------------------------
+
+TITLE: Setting Up Graphiti Environment Variables (Bash)
+DESCRIPTION: These commands set up essential environment variables for Graphiti. `OPENAI_API_KEY` is mandatory for LLM and embedding functionalities, while `NEO4J_URI`, `NEO4J_USER`, and `NEO4J_PASSWORD` configure the Neo4j database connection, with defaults provided.
+SOURCE: https://github.com/getzep/graphiti/blob/main/examples/quickstart/README.md#_snippet_1
+
+LANGUAGE: bash
+CODE:
+```
+# Required for LLM and embedding
+export OPENAI_API_KEY=your_openai_api_key
+
+# Optional Neo4j connection parameters (defaults shown)
+export NEO4J_URI=bolt://localhost:7687
+export NEO4J_USER=neo4j
+export NEO4J_PASSWORD=password
+```
+
+----------------------------------------
+
+TITLE: Formatting Entity Edges to Facts String - Python
+DESCRIPTION: This Python function takes a list of `EntityEdge` objects, typically returned from a Graphiti search, and formats their 'fact' attributes into a single string. Each fact is prefixed with a hyphen and a newline, creating a bulleted list suitable for inclusion in system messages.
+SOURCE: https://github.com/getzep/graphiti/blob/main/examples/langgraph-agent/agent.ipynb#_snippet_10
+
+LANGUAGE: python
+CODE:
+```
+def edges_to_facts_string(entities: list[EntityEdge]):
+    return '-' + '\n- '.join([edge.fact for edge in entities])
+```
+
+----------------------------------------
+
+TITLE: Configure Graphiti with Google Gemini for LLM and Embeddings
+DESCRIPTION: This example shows how to set up Graphiti to work with Google Gemini models for LLM inference and embeddings. It includes the necessary installation command and Python code for initializing `Graphiti` with `GeminiClient` and `GeminiEmbedder`.
+SOURCE: https://github.com/getzep/graphiti/blob/main/README.md#_snippet_3
+
+LANGUAGE: bash
+CODE:
+```
+poetry add "graphiti-core[google-genai]"
+
+# or
+
+uv add "graphiti-core[google-genai]"
+```
+
+LANGUAGE: python
+CODE:
+```
+from graphiti_core import Graphiti
+from graphiti_core.llm_client.gemini_client import GeminiClient, LLMConfig
+from graphiti_core.embedder.gemini import GeminiEmbedder, GeminiEmbedderConfig
+
+# Google API key configuration
+api_key = "<your-google-api-key>"
+
+# Initialize Graphiti with Gemini clients
+graphiti = Graphiti(
+    "bolt://localhost:7687",
+    "neo4j",
+    "password",
+    llm_client=GeminiClient(
+        config=LLMConfig(
+            api_key=api_key,
+            model="gemini-2.0-flash"
+        )
+    ),
+    embedder=GeminiEmbedder(
+        config=GeminiEmbedderConfig(
+            api_key=api_key,
+            embedding_model="embedding-001"
+        )
+    )
+)
+
+# Now you can use Graphiti with Google Gemini
+```
+
+----------------------------------------
+
+TITLE: Configure Graphiti with Azure OpenAI for LLM and Embeddings
+DESCRIPTION: This snippet demonstrates how to initialize Graphiti to use Azure OpenAI for both LLM inference and embeddings. It requires configuring `AsyncAzureOpenAI` client, `LLMConfig` with deployed model names, and `OpenAIEmbedderConfig` for embedding models.
+SOURCE: https://github.com/getzep/graphiti/blob/main/README.md#_snippet_2
+
+LANGUAGE: python
+CODE:
+```
+from openai import AsyncAzureOpenAI
+from graphiti_core import Graphiti
+from graphiti_core.llm_client import LLMConfig, OpenAIClient
+from graphiti_core.embedder.openai import OpenAIEmbedder, OpenAIEmbedderConfig
+from graphiti_core.cross_encoder.openai_reranker_client import OpenAIRerankerClient
+
+# Azure OpenAI configuration
+api_key = "<your-api-key>"
+api_version = "<your-api-version>"
+azure_endpoint = "<your-azure-endpoint>"
+
+# Create Azure OpenAI client for LLM
+azure_openai_client = AsyncAzureOpenAI(
+    api_key=api_key,
+    api_version=api_version,
+    azure_endpoint=azure_endpoint
+)
+
+# Create LLM Config with your Azure deployed model names
+azure_llm_config = LLMConfig(
+    small_model="gpt-4.1-nano",
+    model="gpt-4.1-mini",
+)
+
+# Initialize Graphiti with Azure OpenAI clients
+graphiti = Graphiti(
+    "bolt://localhost:7687",
+    "neo4j",
+    "password",
+    llm_client=OpenAIClient(
+        llm_config=azure_llm_config,
+        client=azure_openai_client
+    ),
+    embedder=OpenAIEmbedder(
+        config=OpenAIEmbedderConfig(
+            embedding_model="text-embedding-3-small"  # Use your Azure deployed embedding model name
+        ),
+        client=azure_openai_client
+    ),
+    # Optional: Configure the OpenAI cross encoder with Azure OpenAI
+    cross_encoder=OpenAIRerankerClient(
+        llm_config=azure_llm_config,
+        client=azure_openai_client
+    )
+)
+
+# Now you can use Graphiti with Azure OpenAI
+```
+
+----------------------------------------
+
+TITLE: Clearing Graphiti Database and Building Schema
+DESCRIPTION: This asynchronous Python snippet first clears all data from the connected Neo4j database using `clear_data`, which is a destructive operation. Subsequently, it builds necessary indices and constraints for the Graphiti schema, preparing the database for new data ingestion.
+SOURCE: https://github.com/getzep/graphiti/blob/main/examples/langgraph-agent/agent.ipynb#_snippet_6
+
+LANGUAGE: python
+CODE:
+```
+# Note: This will clear the database
+await clear_data(client.driver)
+await client.build_indices_and_constraints()
+```
+
+----------------------------------------
+
+TITLE: Install Graphiti with Optional LLM Providers
+DESCRIPTION: Commands to install Graphiti with support for specific LLM providers such as Anthropic, Groq, or Google Gemini. These are installed as extras, and multiple providers can be included in a single installation command.
+SOURCE: https://github.com/getzep/graphiti/blob/main/README.md#_snippet_1
+
+LANGUAGE: bash
+CODE:
+```
+pip install graphiti-core[anthropic]
+```
+
+LANGUAGE: bash
+CODE:
+```
+pip install graphiti-core[groq]
+```
+
+LANGUAGE: bash
+CODE:
+```
+pip install graphiti-core[google-genai]
+```
+
+LANGUAGE: bash
+CODE:
+```
+pip install graphiti-core[anthropic,groq,google-genai]
+```
+
+----------------------------------------
+
+TITLE: Installing Graphiti Core Dependencies (Bash)
+DESCRIPTION: This command installs the `graphiti-core` library using pip, which is required to run the Graphiti quickstart example. It ensures all necessary Python packages are available for interacting with Graphiti and Neo4j.
+SOURCE: https://github.com/getzep/graphiti/blob/main/examples/quickstart/README.md#_snippet_0
+
+LANGUAGE: bash
+CODE:
+```
+pip install graphiti-core
+```
+
+----------------------------------------
+
+TITLE: Installing Python Dependencies for LangGraph and Graphiti
+DESCRIPTION: This command installs the necessary Python packages for building the ShoeBot sales agent. It includes `graphiti-core` for Graphiti functionalities, `langchain-openai` for OpenAI integrations, `langgraph` for agent orchestration, and `ipywidgets` for interactive elements.
+SOURCE: https://github.com/getzep/graphiti/blob/main/examples/langgraph-agent/agent.ipynb#_snippet_0
+
+LANGUAGE: shell
+CODE:
+```
+pip install graphiti-core langchain-openai langgraph ipywidgets
+```
+
+----------------------------------------
+
+TITLE: Running Graphiti MCP Server with SSE Transport (Python)
+DESCRIPTION: This command starts the Graphiti MCP server using Python, configured with the Server-Sent Events (SSE) transport. It enables custom entities and allows specifying a `group_id` to namespace graph data; if not provided, 'default' is used.
+SOURCE: https://github.com/getzep/graphiti/blob/main/mcp_server/README.md#_snippet_15
+
+LANGUAGE: bash
+CODE:
+```
+python graphiti_mcp_server.py --transport sse --use-custom-entities --group-id <your_group_id>
+```
+
+----------------------------------------
+
+TITLE: Running Graphiti MCP Server for Claude Desktop (Docker Compose)
+DESCRIPTION: This command initiates the Graphiti MCP server via Docker Compose, ensuring it runs with the SSE transport, which is a prerequisite for integration with Claude Desktop using a gateway like `mcp-remote`.
+SOURCE: https://github.com/getzep/graphiti/blob/main/mcp_server/README.md#_snippet_18
+
+LANGUAGE: bash
+CODE:
+```
+docker compose up
+```
+
+----------------------------------------
+
+TITLE: Running Graphiti MCP Server with Custom Options
+DESCRIPTION: Starts the Graphiti MCP server with specific command-line options, overriding default environment variable settings. This example sets the LLM model to `gpt-4.1-mini` and configures the transport method to `sse` (Server-Sent Events), allowing for customized server behavior.
+SOURCE: https://github.com/getzep/graphiti/blob/main/mcp_server/README.md#_snippet_6
+
+LANGUAGE: bash
+CODE:
+```
+uv run graphiti_mcp_server.py --model gpt-4.1-mini --transport sse
+```
+
+----------------------------------------
+
+TITLE: Configuring Cursor IDE for Graphiti MCP Server
+DESCRIPTION: This JSON configuration snippet is used within Cursor IDE to define a new MCP server connection named 'graphiti-memory'. It specifies the URL for the Graphiti MCP server's SSE endpoint, allowing Cursor to communicate with it for persistent memory.
+SOURCE: https://github.com/getzep/graphiti/blob/main/mcp_server/README.md#_snippet_17
+
+LANGUAGE: json
+CODE:
+```
+{
+  "mcpServers": {
+    "graphiti-memory": {
+      "url": "http://localhost:8000/sse"
+    }
+  }
+}
+```
+
+----------------------------------------
+
+TITLE: Configuring Graphiti MCP Client for SSE Transport (JSON)
+DESCRIPTION: This JSON configuration snippet demonstrates how to configure an MCP-compatible client to connect to the Graphiti MCP server using SSE (Server-Sent Events) transport, which is HTTP-based. It specifies the transport type and the URL of the SSE endpoint.
+SOURCE: https://github.com/getzep/graphiti/blob/main/mcp_server/README.md#_snippet_13
+
+LANGUAGE: json
+CODE:
+```
+{
+  "mcpServers": {
+    "graphiti-memory": {
+      "transport": "sse",
+      "url": "http://localhost:8000/sse"
+    }
+  }
+}
+```
+
+----------------------------------------
+
+TITLE: Starting Graphiti Services with Docker Compose (Bash)
+DESCRIPTION: This command starts all services defined in the Docker Compose configuration, including the Neo4j database and the Graphiti MCP server. It uses the modern `docker compose` syntax.
+SOURCE: https://github.com/getzep/graphiti/blob/main/mcp_server/README.md#_snippet_10
+
+LANGUAGE: bash
+CODE:
+```
+docker compose up
+```
+
+----------------------------------------
+
+TITLE: Configuring Graphiti MCP Client for Stdio Transport (JSON)
+DESCRIPTION: This JSON configuration snippet shows how to set up an MCP-compatible client to connect to the Graphiti MCP server using `stdio` (standard input/output) transport. It specifies the command to run the server, arguments, and necessary environment variables like Neo4j credentials and OpenAI API key.
+SOURCE: https://github.com/getzep/graphiti/blob/main/mcp_server/README.md#_snippet_12
+
+LANGUAGE: json
+CODE:
+```
+{
+  "mcpServers": {
+    "graphiti-memory": {
+      "transport": "stdio",
+      "command": "/Users/<user>/.local/bin/uv",
+      "args": [
+        "run",
+        "--isolated",
+        "--directory",
+        "/Users/<user>>/dev/zep/graphiti/mcp_server",
+        "--project",
+        ".",
+        "graphiti_mcp_server.py",
+        "--transport",
+        "stdio"
+      ],
+      "env": {
+        "NEO4J_URI": "bolt://localhost:7687",
+        "NEO4J_USER": "neo4j",
+        "NEO4J_PASSWORD": "password",
+        "OPENAI_API_KEY": "sk-XXXXXXXX",
+        "MODEL_NAME": "gpt-4.1-mini"
+      }
+    }
+  }
+}
+```
+
+----------------------------------------
+
+TITLE: Running Graphiti MCP Server Directly
+DESCRIPTION: Executes the `graphiti_mcp_server.py` script using `uv run`. This command starts the Graphiti MCP server with its default configuration, making it ready to accept connections and process requests from MCP clients.
+SOURCE: https://github.com/getzep/graphiti/blob/main/mcp_server/README.md#_snippet_5
+
+LANGUAGE: bash
+CODE:
+```
+uv run graphiti_mcp_server.py
+```
+
+----------------------------------------
+
+TITLE: Invoking LangGraph Agent for Single Query
+DESCRIPTION: This snippet demonstrates how to asynchronously invoke the compiled LangGraph agent with a single user query. It passes a dictionary containing the user's message, user name, and user node UUID, along with a configurable thread ID for session management.
+SOURCE: https://github.com/getzep/graphiti/blob/main/examples/langgraph-agent/agent.ipynb#_snippet_19
+
+LANGUAGE: python
+CODE:
+```
+await graph.ainvoke(
+    {
+        'messages': [
+            {
+                'role': 'user',
+                'content': 'What sizes do the TinyBirds Wool Runners in Natural Black come in?',
+            }
+        ],
+        'user_name': user_name,
+        'user_node_uuid': user_node_uuid,
+    },
+    config={'configurable': {'thread_id': uuid.uuid4().hex}},
+)
+```
+
+----------------------------------------
+
+TITLE: Retrieving ManyBirds Node UUID - Python
+DESCRIPTION: This snippet asynchronously searches the Graphiti client for the 'ManyBirds' node using a specific search type and extracts its UUID. This UUID is crucial for centering subsequent Graphiti searches to prioritize shoe-related data.
+SOURCE: https://github.com/getzep/graphiti/blob/main/examples/langgraph-agent/agent.ipynb#_snippet_9
+
+LANGUAGE: python
+CODE:
+```
+nl = await client._search('ManyBirds', NODE_HYBRID_SEARCH_EPISODE_MENTIONS)
+manybirds_node_uuid = nl.nodes[0].uuid
+```
+
+----------------------------------------
+
+TITLE: Running LangGraph Agent Interactively with Widgets
+DESCRIPTION: This comprehensive snippet sets up an interactive chat interface using Jupyter widgets. It defines an asynchronous `process_input` function to handle user messages, stream responses from the LangGraph agent, and display them. It also creates input and submit widgets, linking the submit action to process user input and manage the conversation flow.
+SOURCE: https://github.com/getzep/graphiti/blob/main/examples/langgraph-agent/agent.ipynb#_snippet_21
+
+LANGUAGE: python
+CODE:
+```
+conversation_output = widgets.Output()
+config = {'configurable': {'thread_id': uuid.uuid4().hex}}
+user_state = {'user_name': user_name, 'user_node_uuid': user_node_uuid}
+
+
+async def process_input(user_state: State, user_input: str):
+    conversation_output.append_stdout(f'\nUser: {user_input}\n')
+    conversation_output.append_stdout('\nAssistant: ')
+
+    graph_state = {
+        'messages': [{'role': 'user', 'content': user_input}],
+        'user_name': user_state['user_name'],
+        'user_node_uuid': user_state['user_node_uuid'],
+    }
+
+    try:
+        async for event in graph.astream(
+            graph_state,
+            config=config,
+        ):
+            for value in event.values():
+                if 'messages' in value:
+                    last_message = value['messages'][-1]
+                    if isinstance(last_message, AIMessage) and isinstance(
+                        last_message.content, str
+                    ):
+                        conversation_output.append_stdout(last_message.content)
+    except Exception as e:
+        conversation_output.append_stdout(f'Error: {e}')
+
+
+def on_submit(b):
+    user_input = input_box.value
+    input_box.value = ''
+    asyncio.create_task(process_input(user_state, user_input))
+
+
+input_box = widgets.Text(placeholder='Type your message here...')
+submit_button = widgets.Button(description='Send')
+submit_button.on_click(on_submit)
+
+conversation_output.append_stdout('Asssistant: Hello, how can I help you find shoes today?')
+
+display(widgets.VBox([input_box, submit_button, conversation_output]))
+```
+
+----------------------------------------
+
+TITLE: Testing LangGraph Tool Node Invocation - Python
+DESCRIPTION: This asynchronous snippet demonstrates how to test the `tool_node` by invoking it with a message. The message is generated by the `llm` based on a query ('wool shoes'), simulating a user input that might trigger a tool call within the LangGraph agent.
+SOURCE: https://github.com/getzep/graphiti/blob/main/examples/langgraph-agent/agent.ipynb#_snippet_14
+
+LANGUAGE: python
+CODE:
+```
+# Test the tool node
+await tool_node.ainvoke({'messages': [await llm.ainvoke('wool shoes')]})
+```
+
+----------------------------------------
+
+TITLE: Configuring Claude Desktop for Graphiti MCP Server
+DESCRIPTION: This JSON configuration snippet for `claude_desktop_config.json` defines an MCP server entry named 'graphiti-memory'. It configures Claude Desktop to use `npx` to run `mcp-remote`, which then proxies the connection to the Graphiti server's SSE endpoint at `http://localhost:8000/sse`.
+SOURCE: https://github.com/getzep/graphiti/blob/main/mcp_server/README.md#_snippet_20
+
+LANGUAGE: json
+CODE:
+```
+{
+  "mcpServers": {
+    "graphiti-memory": {
+      "command": "npx",
+      "args": [
+        "mcp-remote",
+        "http://localhost:8000/sse"
+      ]
+    }
+  }
+}
+```
+
+----------------------------------------
+
+TITLE: Setting Graphiti Environment Variables
+DESCRIPTION: These environment variables are required to configure the Graphiti client, specifying the Neo4j database connection details: URI, username, and password. These should be set in the environment where the application runs.
+SOURCE: https://github.com/getzep/graphiti/blob/main/examples/langgraph-agent/agent.ipynb#_snippet_4
+
+LANGUAGE: bash
+CODE:
+```
+NEO4J_URI=
+NEO4J_USER=
+NEO4J_PASSWORD=
+```
+
+----------------------------------------
+
+TITLE: Setting Environment Variables for Graph Service
+DESCRIPTION: This snippet lists the essential environment variables required for the graph-service to function correctly. These variables configure API keys and Neo4j database connection details, ensuring the service can authenticate and connect to its dependencies.
+SOURCE: https://github.com/getzep/graphiti/blob/main/server/README.md#_snippet_0
+
+LANGUAGE: bash
+CODE:
+```
+OPENAI_API_KEY=your_openai_api_key
+NEO4J_USER=your_neo4j_user
+NEO4J_PASSWORD=your_neo4j_password
+NEO4J_PORT=your_neo4j_port
+```
+
+----------------------------------------
+
+TITLE: Configuring Environment Variables in .env File
+DESCRIPTION: This snippet shows the structure of the .env file used to set environment variables for the Graphiti application. It includes the OpenAI API key and model name, which are crucial for LLM operations. An optional base URL for OpenAI is also shown.
+SOURCE: https://github.com/getzep/graphiti/blob/main/mcp_server/README.md#_snippet_8
+
+LANGUAGE: bash
+CODE:
+```
+# Required for LLM operations
+OPENAI_API_KEY=your_openai_api_key_here
+MODEL_NAME=gpt-4.1-mini
+# Optional: OPENAI_BASE_URL only needed for non-standard OpenAI endpoints
+# OPENAI_BASE_URL=https://api.openai.com/v1
+```
+
+----------------------------------------
+
+TITLE: Installing mcp-remote Globally via npm
+DESCRIPTION: This optional command installs the `mcp-remote` package globally using npm. `mcp-remote` acts as a gateway for Claude Desktop to connect to SSE-based MCP servers like Graphiti, as Claude Desktop does not natively support SSE.
+SOURCE: https://github.com/getzep/graphiti/blob/main/mcp_server/README.md#_snippet_19
+
+LANGUAGE: bash
+CODE:
+```
+npm install -g mcp-remote
+```
+
+----------------------------------------
+
+TITLE: Configuring LangSmith Tracing for LangGraph
+DESCRIPTION: This snippet configures environment variables for LangSmith integration. It sets `LANGCHAIN_TRACING_V2` to `false` and defines the `LANGCHAIN_PROJECT` name for organizing traces in LangSmith.
+SOURCE: https://github.com/getzep/graphiti/blob/main/examples/langgraph-agent/agent.ipynb#_snippet_3
+
+LANGUAGE: python
+CODE:
+```
+os.environ['LANGCHAIN_TRACING_V2'] = 'false'
+os.environ['LANGCHAIN_PROJECT'] = 'Graphiti LangGraph Tutorial'
+```
+
+----------------------------------------
+
+TITLE: Setting Environment Variables Directly with Docker Compose (Bash)
+DESCRIPTION: This command demonstrates how to set environment variables directly when running Docker Compose, providing an alternative to using a .env file. It passes the OpenAI API key and model name as inline environment variables to the Docker Compose process.
+SOURCE: https://github.com/getzep/graphiti/blob/main/mcp_server/README.md#_snippet_9
+
+LANGUAGE: bash
+CODE:
+```
+OPENAI_API_KEY=your_key MODEL_NAME=gpt-4.1-mini docker compose up
+```
+
+----------------------------------------
+
+TITLE: Synchronizing Python Dependencies with uv
+DESCRIPTION: Uses `uv` to create a virtual environment and install all project dependencies specified in the project's configuration (e.g., `pyproject.toml`). This command ensures that all necessary Python packages are available for the Graphiti MCP server to run.
+SOURCE: https://github.com/getzep/graphiti/blob/main/mcp_server/README.md#_snippet_4
+
+LANGUAGE: bash
+CODE:
+```
+uv sync
+```
+
+----------------------------------------
+
+TITLE: Starting Graphiti Services with Older Docker Compose (Bash)
+DESCRIPTION: This command serves the same purpose as `docker compose up` but uses the older `docker-compose` syntax, suitable for environments with older Docker Compose installations.
+SOURCE: https://github.com/getzep/graphiti/blob/main/mcp_server/README.md#_snippet_11
+
+LANGUAGE: bash
+CODE:
+```
+docker-compose up
+```
+
+----------------------------------------
+
+TITLE: Run Graphiti Code Quality Checks
+DESCRIPTION: Execute the `make check` command to automatically format code, run linting checks with Ruff, perform static type checking with Mypy, and execute tests using Pytest. This command should be run before submitting a pull request to ensure code quality.
+SOURCE: https://github.com/getzep/graphiti/blob/main/CONTRIBUTING.md#_snippet_9
+
+LANGUAGE: Shell
+CODE:
+```
+make check
+```
+
+----------------------------------------
+
+TITLE: Clone Graphiti Repository
+DESCRIPTION: Instructions to clone your forked Graphiti repository locally using Git and navigate into the project directory.
+SOURCE: https://github.com/getzep/graphiti/blob/main/CONTRIBUTING.md#_snippet_0
+
+LANGUAGE: Shell
+CODE:
+```
+git clone https://github.com/getzep/graphiti
+cd graphiti
+```
+
+----------------------------------------
+
+TITLE: Visualizing LangGraph Structure with Mermaid
+DESCRIPTION: This code snippet uses the `display` function from `IPython.display` to render a visual representation of the LangGraph. It generates a Mermaid diagram of the compiled graph, allowing for a clear visualization of its nodes and edges.
+SOURCE: https://github.com/getzep/graphiti/blob/main/examples/langgraph-agent/agent.ipynb#_snippet_18
+
+LANGUAGE: python
+CODE:
+```
+with suppress(Exception):
+    display(Image(graph.get_graph().draw_mermaid_png()))
+```
+
+----------------------------------------
+
+TITLE: Push Git Changes to Fork
+DESCRIPTION: Command to push your committed changes from your local branch to your remote fork on GitHub.
+SOURCE: https://github.com/getzep/graphiti/blob/main/CONTRIBUTING.md#_snippet_8
+
+LANGUAGE: Shell
+CODE:
+```
+git push origin your-branch-name
+```
+
+----------------------------------------
+
+TITLE: Format Graphiti Code
+DESCRIPTION: Command to automatically format the codebase according to Graphiti's style guidelines, ensuring consistency.
+SOURCE: https://github.com/getzep/graphiti/blob/main/CONTRIBUTING.md#_snippet_5
+
+LANGUAGE: Shell
+CODE:
+```
+make format
+```
+
+----------------------------------------
+
+TITLE: Run Graphiti Linting Checks
+DESCRIPTION: Command to perform linting checks on the Graphiti codebase to identify potential errors or style violations before committing.
+SOURCE: https://github.com/getzep/graphiti/blob/main/CONTRIBUTING.md#_snippet_6
+
+LANGUAGE: Shell
+CODE:
+```
+make lint
+```
+
+----------------------------------------
+
+TITLE: Install Graphiti Project Dependencies
+DESCRIPTION: Command to install project dependencies using 'make install', assuming Python 3.10+ and Poetry are already set up.
+SOURCE: https://github.com/getzep/graphiti/blob/main/CONTRIBUTING.md#_snippet_1
+
+LANGUAGE: Shell
+CODE:
+```
+make install
+```
+
+----------------------------------------
+
+TITLE: Run Graphiti Tests
+DESCRIPTION: Command to execute all tests for the Graphiti project to ensure your changes haven't introduced regressions.
+SOURCE: https://github.com/getzep/graphiti/blob/main/CONTRIBUTING.md#_snippet_4
+
+LANGUAGE: Shell
+CODE:
+```
+make test
+```
+
+----------------------------------------
+
+TITLE: Configure Environment Variables for Integration Tests
+DESCRIPTION: Environment variables required to run integration tests, including API keys for OpenAI and Anthropic, and Neo4j connection details.
+SOURCE: https://github.com/getzep/graphiti/blob/main/CONTRIBUTING.md#_snippet_2
+
+LANGUAGE: Shell
+CODE:
+```
+export TEST_OPENAI_API_KEY=...
+export TEST_OPENAI_MODEL=...
+export TEST_ANTHROPIC_API_KEY=...
+
+export NEO4J_URI=neo4j://...
+export NEO4J_USER=...
+export NEO4J_PASSWORD=...
+```
+
+----------------------------------------
+
+TITLE: Installing uv Package Manager
+DESCRIPTION: Installs the `uv` package manager by downloading and executing its installation script. `uv` is a fast Python package installer and resolver used for creating virtual environments and managing project dependencies.
+SOURCE: https://github.com/getzep/graphiti/blob/main/mcp_server/README.md#_snippet_3
+
+LANGUAGE: bash
+CODE:
+```
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+----------------------------------------
+
+TITLE: Importing Required Python Libraries
+DESCRIPTION: This snippet imports essential Python modules for the ShoeBot agent, including `asyncio`, `json`, `logging`, `os`, `sys`, `uuid`, `datetime`, `Path`, `Annotated`, `widgets`, `Image`, `display`, and `TypedDict`. It also loads environment variables using `dotenv`.
+SOURCE: https://github.com/getzep/graphiti/blob/main/examples/langgraph-agent/agent.ipynb#_snippet_1
+
+LANGUAGE: python
+CODE:
+```
+import asyncio
+import json
+import logging
+import os
+import sys
+import uuid
+from contextlib import suppress
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Annotated
+
+import ipywidgets as widgets
+from dotenv import load_dotenv
+from IPython.display import Image, display
+from typing_extensions import TypedDict
+
+load_dotenv()
+```
+
+----------------------------------------
+
+TITLE: Configuring Python Logging
+DESCRIPTION: This function sets up a basic logging configuration, setting the root logger level to `ERROR` and adding a `StreamHandler` to output `INFO` level messages and above to `sys.stdout`. It uses a formatter to include the logger name, level, and message.
+SOURCE: https://github.com/getzep/graphiti/blob/main/examples/langgraph-agent/agent.ipynb#_snippet_2
+
+LANGUAGE: python
+CODE:
+```
+def setup_logging():
+    logger = logging.getLogger()
+    logger.setLevel(logging.ERROR)
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.INFO)
+    formatter = logging.Formatter('%(name)s - %(levelname)s - %(message)s')
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+    return logger
+
+
+logger = setup_logging()
+```
+
+----------------------------------------
+
+TITLE: Cloning Graphiti Repository (Git)
+DESCRIPTION: Clones the Graphiti GitHub repository using the standard `git clone` command. This is the initial step required to set up the Graphiti project locally on your machine.
+SOURCE: https://github.com/getzep/graphiti/blob/main/mcp_server/README.md#_snippet_0
+
+LANGUAGE: bash
+CODE:
+```
+git clone https://github.com/getzep/graphiti.git
+```
