@@ -1,0 +1,16 @@
+/workspace/psy-love/backend/main.py:124: DeprecationWarning: 
+        on_event is deprecated, use lifespan event handlers instead.
+
+        Read more about it in the
+        [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+        
+  @app.on_event("startup")
+INFO:     Will watch for changes in these directories: ['/workspace/psy-love/backend']
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     Started reloader process [10214] using StatReload
+INFO:     Started server process [10257]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+⚠️  Failed to initialize Graphiti: The api_key client option must be set either by passing api_key to the client or by setting the OPENAI_API_KEY environment variable
+   Running in demo mode without Graphiti
+INFO:     127.0.0.1:33412 - "GET /health HTTP/1.1" 200 OK
